@@ -27,7 +27,7 @@ from sklearn.ensemble import ExtraTreesClassifier
 from sklearn.preprocessing import LabelEncoder 
 from sklearn.linear_model import LogisticRegression
 from pylab import *
-import  sklearn.discriminant_analysis as DA
+import sklearn.discriminant_analysis as DA
 from sklearn.gaussian_process import GaussianProcessClassifier
 from sklearn.gaussian_process.kernels import RBF
 from sklearn.neural_network import MLPClassifier
@@ -48,12 +48,18 @@ from scipy.cluster import hierarchy
 from sklearn.ensemble import AdaBoostClassifier
 from sklearn.model_selection import StratifiedKFold
 from sklearn.metrics import accuracy_score
+from sklearn.model_selection import StratifiedKFold
+from sklearn.metrics import roc_curve, auc
+from sklearn.preprocessing import label_binarize
+from sklearn import tree
+from sklearn.naive_bayes import BernoulliNB
+import sklearn.metrics as m
 
 def ReadData (endereco_dados, nome_sheet_dados, nome_sheet_variaveis):
     # READ DATA 
-    print "Iniciando load dos dados"
+    print ("Iniciando load dos dados")
     W = px.load_workbook(endereco_dados, data_only = True)
-    print "step 1 ok"
+    print ("step 1 ok")
     p = W[nome_sheet_dados]
     p2 = W[nome_sheet_variaveis]    
     dados_planilha =[]
@@ -77,13 +83,96 @@ def ReadData (endereco_dados, nome_sheet_dados, nome_sheet_variaveis):
         for k in row:
             if k.value:
                 variaveis.append(k.internal_value)
+
     return dados_planilha, variaveis
+
+
+def Make_TSNE (Xnormalizer):
+    tsne = TSNE(n_components = 2)
+    X_PCA3 = tsne.fit_transform(Xnormalizer)
+    df = pd.DataFrame(np.array([X_PCA3[:,0], X_PCA3[:,1], Ydata]).T, columns=["TSNE1","TSNE2", "Grupos"])
+    sns.pairplot(x_vars=["TSNE1"], y_vars=["TSNE2"], data=df, hue='Grupos', size=5 )
+    plt.title("TSNE Factors")
+    plt.show()
+    
+def Make_UMAP (Xnormalizer):
+    reducer = umap.UMAP().fit_transform(Xnormalizer)
+    df = pd.DataFrame(np.array([reducer[:,0], reducer[:,1], Ydata]).T, columns=["UMAP1","UMAP2","Grupos"])
+    um  = df["UMAP1"].astype(float)
+    dois = df["UMAP2"].astype(float)
+    print (um.corr(dois))
+    sns.pairplot(x_vars=["UMAP1"], y_vars=["UMAP2"], data=df, hue="Grupos",size=5)
+    plt.title("UMAP")
+    plt.show()
+
+
+def Prever_R_met(classificador, dados_planilha, X_PCA):
+    # DETERMINAÇÃO DA RECUPERAÇÃO METALURGICA
+    predicted = classificador.predict(X_PCA)
+    ouro = dados_planilha['Au [ppm]']
+    peso = dados_planilha['Weight']
+    
+
+    ouro_rejeito =[]
+    ouro_alimentacao =[]
+    ouro_concentrado = []
+    massa_rejeito = 0
+    massa_concentrado= 0
+    massa_alimentacao = 0
+    
+   
+    for j,i in enumerate(predicted):
+        if i == 'MINERIO':
+            if ouro[j] >= 0  and peso[j] > 0:
+                ouro_concentrado.append(ouro[j]*peso[j])
+                massa_concentrado += float(peso[j])
+        if i == 'ESTERIL':
+            if ouro[j] >= 0 and peso[j] > 0:
+                ouro_rejeito.append(ouro[j]*float(peso[j]))
+                massa_rejeito += peso[j]
+        if ouro[j] >= 0 and peso[j]>0:
+            ouro_alimentacao.append(ouro[j]*float(peso[j]))
+            massa_alimentacao += peso[j]
+                
+   
+    ouro_rejeito = np.array(ouro_rejeito)
+    ouro_rejeito = ouro_rejeito[ouro_rejeito != None]
+
+    ouro_concentrado = np.array(ouro_concentrado)
+    ouro_concentrado= ouro_concentrado[ouro_concentrado!= None]
+
+    ouro_alimentacao = np.array(ouro_alimentacao)
+    ouro_alimentacao= ouro_alimentacao[ouro_alimentacao!= None]
+    
+    teor_concentrado = np.nansum(ouro_concentrado)/massa_concentrado
+    teor_alimentacao = np.nansum(ouro_alimentacao)/massa_alimentacao
+    print ("Recuperação metalúrgica do ouro no ore sorting")
+    print ("..............................................")
+    print (teor_concentrado*massa_concentrado/(teor_alimentacao*massa_alimentacao))
+
+ 
+
+def Make_PCA_graph(nfactors, Xnormalizer, Ydata):
+    #transform pca values
+    pca = decomposition.PCA(n_components = nfactors)
+    X_PCA2 = pca.fit_transform(Xnormalizer)
+    X_PCA = pca.fit_transform(Xnormalizer)
+    #X_PCA = Xnormalizer
+
+    
+    #make graph of pca values 
+    df = pd.DataFrame(np.array([X_PCA2[:,0], X_PCA2[:,1], Ydata]).T, columns=["PCA1","PCA2", "Grupos"])
+    sns.pairplot(x_vars=["PCA1"], y_vars=["PCA2"], data=df, hue='Grupos',markers ='+', size=7, plot_kws={'alpha': 0.8}  )
+    plt.title("PCA Factors")
+    plt.show()
+    return X_PCA
+
 
 def Remover_outliers (Ydata, Xdata, writer, ndesvpad):
 
     index_outliers =[]
-    for i in xrange(len(Xdata)):
-        for j in xrange (len(Xdata[0])):
+    for i in range(len(Xdata)):
+        for j in range (len(Xdata[0])):
             if Xdata[i][j] + np.mean(Xdata[i][j])> ndesvpad or Xdata[i][j] + np.mean(Xdata[i][j])  < -ndesvpad:
                 index_outliers.append(i)
     
@@ -129,9 +218,66 @@ def Importancia_variavies ( variaveis, Xnormalizer, Ydata, writer):
     plt.savefig(".\\IMAGENS\\importancia.png", dpi = 800)
     plt.show()   
     
+def Create_ROC_curve(X_PCA, Ydata, model):
+
+    lb = label_binarize(Ydata, classes=['MINERIO', 'ESTERIL'])
+    fpr, tpr, _ = roc_curve(lb[:,0],model.fit(X_PCA, lb[:,0]).predict_proba(X_PCA)[:,1])
     
+
+    plt.plot(fpr,tpr, label = "curva ROC")
+    plt.plot([0, 1], [0, 1], color='navy',lw=2, linestyle='--')
+    plt.xlim([0.0, 1.0])
+    plt.ylim([0.0, 1.05])
+    plt.xlabel('TAXA DE FALSOS POSITIVOS')
+    plt.ylabel('TAXA DE POSITIVOS VERDADEIROS')
+    plt.title('ROC - Receiver operating characteristic ')
+    plt.legend(loc="lower right")
+    plt.show()
     
+def Create_metrics_relatory(list_of_classificators,list_of_labels, X_PCA, Ydata):
     
+        arquivo_saida =[]
+        arquivo = open("relatorio_classificacao.txt","w")
+        arquivo.write('modelo accuracy_mean accuracy_var f1-score_mean f1_score_var precision_mean precision_var recall_mean recall_var area_above_roc_mean area_above_roc_var \n' )
+        kfold = StratifiedKFold(n_splits = 10, shuffle = True, random_state = 0)
+        for modelo, nome in zip(list_of_classificators, list_of_labels):
+            resultados_a = []
+            resultados_f = []
+            resultados_s = []
+            resultados_r = []
+            resultados_roc = []
+            Ydata2 = np.array([1 if x == "MINERIO" else 0 for x in Ydata])
+            for indice_treinamento, indice_teste in kfold.split(X_PCA,Ydata2):
+                modelo.fit( X_PCA[indice_treinamento], Ydata2[indice_treinamento])
+                previsoes = modelo.predict(X_PCA[indice_teste])
+                resultados_a.append(m.accuracy_score(Ydata2[indice_teste], previsoes))
+                resultados_f.append(m.f1_score(Ydata2[indice_teste], previsoes))
+                resultados_s.append(m.precision_score(Ydata2[indice_teste], previsoes))
+                resultados_r.append(m.recall_score(Ydata2[indice_teste], previsoes))
+                resultados_roc.append(m.roc_auc_score(Ydata2[indice_teste], previsoes))
+            resultados = np.asarray(resultados_a)
+            resultados1 = np.asarray(resultados_f)
+            resultados2 = np.asarray(resultados_s)
+            resultados3 = np.asarray(resultados_r)
+            resultados4 = np.asarray(resultados_roc)
+            arquivo.write("{}  {} {} {} {} {} {} {} {} {} {} \n".format(nome,
+                          str(resultados.mean()),str(resultados.var()),
+                          str(resultados1.mean()),str(resultados1.var()),
+                          str(resultados2.mean()),str(resultados2.var()),
+                          str(resultados3.mean()),str(resultados3.var()),
+                          str(resultados4.mean()),str(resultados4.var())))
+        arquivo.close()
+
+def Create_graphivx(DT):
+     # Export as dot file
+    dot_data = export_graphviz(DT, out_file='tree.dot', 
+                feature_names = variaveis[1:],
+                class_names = ['MINERIO', 'ESTERIL'],
+                rounded = True, proportion = False, 
+                precision = 2, filled = True)
+    graph = graphviz.Source(dot_data)
+    # remember dot -Tpng tree.dot -o tree.png
+
 def PCA_importancia (labels_input, Xnormalizer, writer):
     pca = decomposition.PCA(n_components=len(labels_input))
     PCA = pca.fit_transform(Xnormalizer)
@@ -140,19 +286,24 @@ def PCA_importancia (labels_input, Xnormalizer, writer):
     accumulative_importance = np.cumsum(factors_importance)
     dados = np.stack((factors_importance,accumulative_importance), axis=-1)
     factors_importance = pd.DataFrame(dados, columns=['Factors Importance', 'Acumulative Importance'])
-    factors_importance.to_excel(writer, 'Importancia_fatores')   
+    factors_importance.to_excel(writer, 'Importancia_fatores') 
+    print ("IMPORTANCIA PCA")
+    print ("....................")
+    print ([[round(n, 5) for n in accumulative_importance]])
     return accumulative_importance
 
-def HCA (data, Ydata):
+def MDS (data, Ydata):
     
+
     data = np.array(data)
     similarities = euclidean_distances(data.T)
     mds = manifold.MDS(n_components=2,dissimilarity="precomputed")
     pos = mds.fit(similarities).embedding_   
-    plt.figure(figsize=(30,30))
+    plt.figure(figsize=(10,10))
     plt.scatter(pos[:,0],pos[:,1])   
     for i, d in enumerate(Ydata):
         plt.annotate(d, (pos[:,0][i], pos[:,1][i]))
+    plt.savefig(".\\IMAGENS\\MDS.png", dpi =500)
     plt.show()
     return 0
 
@@ -177,9 +328,9 @@ def Curva_Aprendizado(Xnormalizer, Ydata, model, titulo):
     fig, axes = plt.subplots()
     axes.plot(number_data, test, label="Média dos scores da cross validação - Teste")
     axes.plot(number_data, train, label= "Média dos scores da cross validação - Treino")
-    axes.set_xlabel("Porcentagem dos dados de treino"+titulo)
-    axes.set_ylabel("Score")
-    plt.savefig(".\\IMAGENS\\curva_aprendizado{}.png".format(titulo), dpi =800)
+    axes.set_xlabel("Porcentagem dos dados de treino  "+titulo)
+    axes.set_ylabel("Acurácia")
+    plt.savefig(".\\IMAGENS\\curva_aprendizado{}.png".format(titulo), dpi =500)
     fig.legend()
     plt.show()
     
@@ -200,7 +351,50 @@ def classifaction_report_csv(report,writer,nome):
     dataframe = pd.DataFrame.from_dict(report_data)
     dataframe.to_excel(writer,nome)
 
-def Report_Classificacao(Xnormalizer, Ydata, modelo, nome,writer, minerio_esteril ):
+def Classificators(X_PCA, Ydata, list_of_labels):
+    
+    list_of_classificators = {}
+    for i in list_of_labels:
+        if i not in ["LOGISTIC", "LDA", "SVM", "RF", "NEURAL", "KNC", "DT", "NB"]:
+            raise Exception("There is no classification model with this label") 
+    if "LOGISTIC" in list_of_labels:
+        LOGISTIC = LogisticRegression ()
+        LOGISTIC.fit(X_PCA, Ydata)
+        list_of_classificators['LOGISTIC'] = LOGISTIC
+    if "LDA" in list_of_labels:
+        LDA = LinearDiscriminantAnalysis ()
+        LDA.fit(X_PCA, Ydata)
+        list_of_classificators['LDA'] = LDA
+    if "SVM" in list_of_labels:
+        SVM = svm.SVC(probability=True)
+        SVM.fit(X_PCA, Ydata)
+        list_of_classificators['SVM'] = SVM
+    if "RF" in list_of_labels:
+        RF = RandomForestClassifier(max_depth =4, criterion ='entropy', min_samples_split= 15, random_state =0)
+        RF.fit(X_PCA, Ydata)
+        list_of_classificators['RF'] = RF
+    if "DT" in list_of_labels:
+        DT = tree.DecisionTreeClassifier(max_depth =4, criterion ='entropy', min_samples_split= 15)
+        DT.fit(X_PCA, Ydata)
+        list_of_classificators['DT'] = DT
+    if "NEURAL" in list_of_labels:
+        NEURAL = MLPClassifier( solver='lbfgs', alpha=1e-5,hidden_layer_sizes=(5, 10), random_state=0)
+        NEURAL.fit(X_PCA, Ydata)
+        list_of_classificators['NEURAL'] = NEURAL
+    if "KNC" in list_of_labels:
+        KNC = KNeighborsClassifier(n_neighbors= 30)
+        KNC.fit(X_PCA, Ydata)
+        list_of_classificators['KNC'] = KNC
+    if "NB" in list_of_labels:
+        NB = BernoulliNB(alpha = 1.0)
+        NB.fit(X_PCA, Ydata)
+        list_of_classificators['NB'] = NB
+    return list_of_classificators
+    
+
+
+
+def Confusion_Matrix(Xnormalizer, Ydata, modelo, nome, minerio_esteril ):
    
     kfold = StratifiedKFold(n_splits = 10, shuffle = True, random_state = 0)
     resultados = []
@@ -217,7 +411,7 @@ def Report_Classificacao(Xnormalizer, Ydata, modelo, nome,writer, minerio_esteri
             precisao = confusion_matrix(Ydata2[indice_teste], previsoes)
             resultados.append(precisao)
         resultados = np.asarray(resultados)
-        classes = ["ESTERIL","MINERIO"]
+        classes = ["ESTÉRIL","MINÉRIO"]
     else:
         le = preprocessing.LabelEncoder()
         le.fit(Ydata)
@@ -245,16 +439,10 @@ def Report_Classificacao(Xnormalizer, Ydata, modelo, nome,writer, minerio_esteri
         yticklabels=df.columns, cmap=cmap,annot=True, fmt=".2f")
     plt.ylabel('Valor verdadeiro')
     plt.xlabel('Valor predito')
-    plt.savefig(".\\IMAGENS\\confuse_matriz{}.png".format(nome), dpi = 800)
+    plt.savefig(".\\IMAGENS\\confuse_matriz{}.png".format(nome), dpi = 500)
     plt.show()
-    df.to_excel(writer,nome)
     
-    
-    # PRINTAR O REPORTE DE CLASSIFICAÇÃO
-    #........................................................................
-    
-    #classification_report_dados = classification_report(Y_test,predicted)
-    #classifaction_report_csv(classification_report_dados,writer,nome)
+
     
    
 
@@ -265,26 +453,21 @@ def correlation_matrix(df, Variaveis):
     sns.heatmap(corr, 
         xticklabels=corr.columns,
         yticklabels=corr.columns, cmap=cmap,annot=True, fmt=".2f")
-    plt.savefig(".\\IMAGENS\\correlation.png", dpi = 2000)
+    plt.savefig(".\\IMAGENS\\correlation.png", dpi = 500)
     plt.show()
     
-def histogram (df, output):
+def histogram (df, output, size):
     
-    tamanho = df.shape[1]/2 + df.shape[1]%2
-
-    if df.shape[1]%2 == 0 and df.shape[1] > 2:
-        f, axes = plt.subplots(tamanho, 2, figsize=(12, 14), sharex=True)
-        p = 0
-        for i in xrange(tamanho):
-            for j in xrange(2):
-                sns.distplot( df[output[p]] , ax=axes[i,j])
-                p += 1
-    else: 
-        f, axes = plt.subplots(df.shape[1], 1, figsize=(12, 14), sharex=True)
-        for i in xrange(df.shape[1]):
-            sns.distplot(df[output[i]], ax= axes[i])
-    plt.savefig(".\\IMAGENS\\histogram.png", dpi = 2000)
+    colors =["skyblue","olive","gold","teal"]
+    f, axes = plt.subplots(size[0], size[1],figsize=(20,20), sharex=True)
+    o = 0
+    for i in range(size[0]):
+        for j in range(size[1]):
+            sns.distplot( df[output[o]] , color=np.random.choice(colors), ax=axes[i, j])
+            o += 1
     plt.show()
+    plt.savefig(".\\IMAGENS\\histogram.png", dpi = 500)
+    #plt.show()
 
 def Curva_concentracao (df, variaveis, minimo, maximo,delta):
     teor_concentrado = []
@@ -315,7 +498,7 @@ def Curva_concentracao (df, variaveis, minimo, maximo,delta):
     plt.plot(np.linspace(minimo,maximo,delta), teor_concentrado, label = "Concentração")
     plt.plot(np.linspace(minimo,maximo,delta), concentracao, label="Recuperação")
     plt.legend()
-    plt.savefig(".\\IMAGENS\\recuperacao.png", dpi = 800)
+    plt.savefig(".\\IMAGENS\\recuperacao.png", dpi = 500)
     plt.show()
     
 def meshgrid2(*arrs):
@@ -339,7 +522,13 @@ def meshgrid2(*arrs):
 
     return tuple(ans)
 
-
+def Create_classification_charts(X_PCA, Ydata, classificators, list_of_labels, minerio_esteril, caprend = True, cconf = True):
+    for modelo, nome in zip(classificators, list_of_labels):
+        if caprend == True:
+            Curva_Aprendizado(X_PCA, Ydata, modelo, nome)
+        if cconf == True:
+            Confusion_Matrix(X_PCA, Ydata, modelo, nome,minerio_esteril )
+        #Make_image(X_PCA,Ydata,nome,modelo, pca, Xnormalizer, variaveis,minerio_esteril)
     
     
 def Make_image(X_PCA,Ydata,nome,modelo, pca, Xnormalizer, variaveis,minerio_esteril):
@@ -419,7 +608,7 @@ def Make_image(X_PCA,Ydata,nome,modelo, pca, Xnormalizer, variaveis,minerio_este
         plt.title(("MODELO {} PCA_1 X PCA_2").format(nome))
         plt.xlabel("1st eigenvector")
         plt.ylabel("2nd eigenvector")
-        plt.savefig(".\IMAGENS\imagen_modelo{}.png".format(nome), dpi = 800)
+        plt.savefig(".\IMAGENS\imagen_modelo{}.png".format(nome), dpi = 500)
         plt.show()
        
 def print_contagem(Ydata):
@@ -429,7 +618,7 @@ def print_contagem(Ydata):
     sns.countplot(x='Grupos', data=df, palette="Greens_d") 
     plt.xlabel("Grupos")
     plt.ylabel("Contagem")
-    plt.savefig(".\IMAGENS\count.png", dpi = 800)
+    plt.savefig(".\IMAGENS\count.png", dpi = 500)
     plt.show(fig)
     
 def print_dados(Xnormalizer, Ydata,labels_input,labels):
@@ -448,7 +637,7 @@ def print_dados(Xnormalizer, Ydata,labels_input,labels):
     sns.set()
     plt.figure(figsize=(8,4))
     sns.countplot(x='Grupos', data=df, palette="Greens_d") 
-    plt.savefig(".\IMAGENS\dados.png", dpi = 800)
+    plt.savefig(".\IMAGENS\dados.png", dpi = 500)
     plt.show()
     
 def Create_supersec(Xvalores, Ylabel):
