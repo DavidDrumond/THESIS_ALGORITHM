@@ -54,36 +54,42 @@ from sklearn.preprocessing import label_binarize
 from sklearn import tree
 from sklearn.naive_bayes import BernoulliNB
 import sklearn.metrics as m
+import graphviz
+from sklearn.tree import export_graphviz
 
 def ReadData (endereco_dados, nome_sheet_dados, nome_sheet_variaveis):
     # READ DATA 
-    print ("Iniciando load dos dados")
-    W = px.load_workbook(endereco_dados, data_only = True)
-    print ("step 1 ok")
-    p = W[nome_sheet_dados]
-    p2 = W[nome_sheet_variaveis]    
-    dados_planilha =[]
-    variaveis =[]
-    labels = []
-    linha_inicial = 0
-    skip_row = 0
-    for row in p.iter_rows():
-        b =[]
-        linha_inicial += 1
-        if linha_inicial ==  (skip_row +  1):
+    print ("Iniciando carregamento dos dados")
+    print(".............................................................................................")
+    try:
+        W = px.load_workbook(endereco_dados, data_only = True)
+        p = W[nome_sheet_dados]
+        p2 = W[nome_sheet_variaveis]    
+        dados_planilha =[]
+        variaveis =[]
+        labels = []
+        linha_inicial = 0
+        skip_row = 0
+        for row in p.iter_rows():
+            b =[]
+            linha_inicial += 1
+            if linha_inicial ==  (skip_row +  1):
+                for k in row:
+                    labels.append(k.internal_value)
+            if linha_inicial > (skip_row + 1): 
+                for k in row:
+                    b.append(k.internal_value)
+                dados_planilha.append(b)
+                
+        dados_planilha = pd.DataFrame(dados_planilha, columns=labels)        
+        for row in p2.iter_rows():
             for k in row:
-                labels.append(k.internal_value)
-        if linha_inicial > (skip_row + 1): 
-            for k in row:
-                b.append(k.internal_value)
-            dados_planilha.append(b)
-            
-    dados_planilha = pd.DataFrame(dados_planilha, columns=labels)        
-    for row in p2.iter_rows():
-        for k in row:
-            if k.value:
-                variaveis.append(k.internal_value)
-
+                if k.value:
+                    variaveis.append(k.internal_value)
+    except:
+        raise Exception("Endereco de dados ou configuração da planilha errada")
+    print ("Carregamento dos dados concluido")
+    print(".............................................................................................")
     return dados_planilha, variaveis
 
 
@@ -144,11 +150,11 @@ def Prever_R_met(classificador, dados_planilha, X_PCA):
     ouro_alimentacao = np.array(ouro_alimentacao)
     ouro_alimentacao= ouro_alimentacao[ouro_alimentacao!= None]
     
-    teor_concentrado = np.nansum(ouro_concentrado)/massa_concentrado
-    teor_alimentacao = np.nansum(ouro_alimentacao)/massa_alimentacao
+    teor_concentrado = np.nansum(ouro_concentrado)/float(massa_concentrado)
+    teor_alimentacao = np.nansum(ouro_alimentacao)/float(massa_alimentacao)
     print ("Recuperação metalúrgica do ouro no ore sorting")
-    print ("..............................................")
-    print (teor_concentrado*massa_concentrado/(teor_alimentacao*massa_alimentacao))
+    print (".............................................................................................")
+    print (float(teor_concentrado*massa_concentrado)/float(teor_alimentacao*massa_alimentacao))
 
  
 
@@ -268,15 +274,7 @@ def Create_metrics_relatory(list_of_classificators,list_of_labels, X_PCA, Ydata)
                           str(resultados4.mean()),str(resultados4.var())))
         arquivo.close()
 
-def Create_graphivx(DT):
-     # Export as dot file
-    dot_data = export_graphviz(DT, out_file='tree.dot', 
-                feature_names = variaveis[1:],
-                class_names = ['MINERIO', 'ESTERIL'],
-                rounded = True, proportion = False, 
-                precision = 2, filled = True)
-    graph = graphviz.Source(dot_data)
-    # remember dot -Tpng tree.dot -o tree.png
+
 
 def PCA_importancia (labels_input, Xnormalizer, writer):
     pca = decomposition.PCA(n_components=len(labels_input))
@@ -288,7 +286,7 @@ def PCA_importancia (labels_input, Xnormalizer, writer):
     factors_importance = pd.DataFrame(dados, columns=['Factors Importance', 'Acumulative Importance'])
     factors_importance.to_excel(writer, 'Importancia_fatores') 
     print ("IMPORTANCIA PCA")
-    print ("....................")
+    print (".............................................................................................")
     print ([[round(n, 5) for n in accumulative_importance]])
     return accumulative_importance
 
@@ -459,15 +457,19 @@ def correlation_matrix(df, Variaveis):
 def histogram (df, output, size):
     
     colors =["skyblue","olive","gold","teal"]
-    f, axes = plt.subplots(size[0], size[1],figsize=(20,20), sharex=True)
+    NROWS = int(size/2)
+    NCOLS = int(size/NROWS)
+    print (NROWS,NCOLS)
     o = 0
-    for i in range(size[0]):
-        for j in range(size[1]):
-            sns.distplot( df[output[o]] , color=np.random.choice(colors), ax=axes[i, j])
-            o += 1
-    plt.show()
+    plt.subplots(figsize=(10,10))
+    for o in range(len(output)):
+        plt.subplot(NROWS,NCOLS,(o+1))
+        plt.hist(df[output[o]] , color=np.random.choice(colors))
+        plt.xlabel(output[o])
+        o +=1 
     plt.savefig(".\\IMAGENS\\histogram.png", dpi = 500)
-    #plt.show()
+    plt.show()
+
 
 def Curva_concentracao (df, variaveis, minimo, maximo,delta):
     teor_concentrado = []
@@ -623,7 +625,6 @@ def print_contagem(Ydata):
     
 def print_dados(Xnormalizer, Ydata,labels_input,labels):
     # REALIZAR GRÁFICO DOS DADOS
-
     x_label = labels_input[1]
     y_label = labels_input[0]
 
@@ -633,15 +634,13 @@ def print_dados(Xnormalizer, Ydata,labels_input,labels):
     #plt.xscale('log')
     #plt.yscale('log')
     plt.show()
-    
     sns.set()
     plt.figure(figsize=(8,4))
     sns.countplot(x='Grupos', data=df, palette="Greens_d") 
     plt.savefig(".\IMAGENS\dados.png", dpi = 500)
     plt.show()
     
-def Create_supersec(Xvalores, Ylabel):
-    np.cov(Xvalores)
+
     
     
     
